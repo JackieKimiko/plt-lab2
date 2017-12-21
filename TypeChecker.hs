@@ -52,14 +52,18 @@ typecheck (PDefs ds) = do
           (Id "readDouble", FunSig Type_void [ADecl Type_double undefined])
         ]
       sigEntry (DFun t f args _ss) = (f, FunSig t args)
+
   -- Check for duplicate function definitions
   let names = map fst sigPairs
       dup   = names List.\\ List.nub names
+
   unless (null dup) $ do
     throwError $ "the following functions are defined several times: " ++
       List.intercalate ", " (map printTree dup)
+
   -- Check function definitions
   evalStateT (runReaderT (checkDefs ds) sig) (Cxt Type_void [])
+
   -- Check for main
   checkMain sig
 
@@ -81,8 +85,10 @@ checkDef :: Def -> TC ()
 checkDef (DFun t f args ss) = do
   -- The initial context is a single empty block.
   put $ Cxt t [Map.empty]
+
   -- Process function arguments.
   checkArgs args
+
   -- Check function body.
   checkStms ss
 
@@ -147,12 +153,14 @@ checkStm = \case
     --Check the Expressions
     checkExp exp Type_bool
 
-    --Check the Statements
-    modify $ \ cxt -> cxt { cxtBlocks = (Map.empty) : (cxtBlocks cxt) }
+    --Explicitly push an Empty top block
+    pushBlock
 
+    --Check the Statements
     checkStm stm
 
-    modify $ \ cxt -> cxt {  cxtBlocks = tail (cxtBlocks  cxt) }
+    --Pop the top block
+    popBlock
 
     return ()
 
@@ -161,30 +169,26 @@ checkStm = \case
     checkExp exp Type_bool
 
     --Check If Statements
-    modify $ \ cxt -> cxt { cxtBlocks = (Map.empty) : (cxtBlocks cxt) }
-
+    pushBlock
     checkStm stm1
-
-    modify $ \ cxt -> cxt {  cxtBlocks = tail (cxtBlocks  cxt) }
+    popBlock
 
     --Check Else Statements
-    modify $ \ cxt -> cxt { cxtBlocks = (Map.empty) : (cxtBlocks cxt) }
-
+    pushBlock
     checkStm stm2
-
-    modify $ \ cxt -> cxt {  cxtBlocks = tail (cxtBlocks  cxt) }
+    popBlock
 
     return ()
 
   SBlock stms -> do
     --Put an empty block at the top of the block
-    modify $ \ cxt -> cxt { cxtBlocks = (Map.empty) : (cxtBlocks cxt) }
+    pushBlock
 
     --Check Nested statements
     checkStms stms
 
     --Remove Topmost block
-    modify $ \ cxt -> cxt {  cxtBlocks = tail (cxtBlocks  cxt) }
+    popBlock
 
     return ()
 
@@ -324,8 +328,21 @@ checkExp :: Exp -> Type -> TC ()
 checkExp e t = do
   t' <- inferExp e
   unless (t == t') $ throwError $
-    "inferred type " ++ printTree t' ++ " does not match expected type " ++ printTree t
+    "inferred type " ++ printTree t' ++
+    " does not match expected type " ++ printTree t
 
+
+----Auxilliary Functions:-------------------------------------------------------
+--Pushes an empty Block onto top of context
+pushBlock :: TC ()
+pushBlock = modify $ \ cxt -> cxt { cxtBlocks = (Map.empty) : (cxtBlocks cxt) }
+
+--Pops topmost block from context
+popBlock :: TC ()
+popBlock = modify $ \ cxt -> cxt {  cxtBlocks = tail (cxtBlocks  cxt) }
+
+
+--Put a fresh Variable x with Type t in the topmost block
 newVar :: Id -> Type -> TC ()
 newVar x t = do
   case t of
@@ -339,12 +356,15 @@ newVar x t = do
       let block' = Map.insert x t block
       modify $ \ cxt -> cxt { cxtBlocks = block' : tail (cxtBlocks cxt) }
 
-nyi :: Show a => a -> TC b
-nyi a = throwError $ "not yet implemented: checking " ++ show a
 
+--Check if variable id exists in Environment, return Type t
 lookUpVar :: Id -> [Block]  -> TC Type
 lookUpVar id blocks = case Map.lookup id (Map.unions blocks) of
     Nothing -> throwError $ "undefined variable called " ++ printTree id
     Just t  -> if elem t [Type_int, Type_double]
-               then return t
-               else throwError $ "Incr only defined for Int/Double " ++ printTree id
+      then return t
+      else throwError $ "Incr only defined for Int/Double " ++ printTree id
+
+--Points out not yet implemented parts
+--nyi :: Show a => a -> TC b
+--nyi a = throwError $ "not yet implemented: checking " ++ show a
